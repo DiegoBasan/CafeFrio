@@ -241,24 +241,30 @@ let currentTicket=null;
 function ticketName(s){const d=new Date(s.ts);const p=n=>String(n).padStart(2,'0');return `CafeFrio ${p(d.getDate())}-${p(d.getMonth()+1)}-${String(d.getFullYear()).slice(2)} ${folioStr(s.folio)}`}
 // Muestra el ticket con su sombra dibujada dentro de la imagen (Safari pinta mal las sombras CSS al animar)
 // y lo "imprime" deslizándolo desde la ranura cada vez que se abre.
-async function showPrinted(c){
-  const w=$('#tkwrap');if(!w)return;
+let printUrl=null;
+async function showPrinted(c,openedAt){
   const dark=document.documentElement.classList.contains('dark');
   const sx=56,sb=80;const d=document.createElement('canvas');d.width=c.width+sx*2;d.height=c.height+sb;
   const x=d.getContext('2d');
   x.shadowColor=dark?'rgba(0,0,0,.6)':'rgba(30,10,15,.16)';x.shadowBlur=44;x.shadowOffsetY=18;x.drawImage(c,sx,0);
   x.shadowColor=dark?'rgba(0,0,0,.5)':'rgba(0,0,0,.12)';x.shadowBlur=4;x.shadowOffsetY=2;x.drawImage(c,sx,0);
   x.shadowColor='transparent';x.drawImage(c,sx,0);
-  const img=new Image();img.alt='Ticket de la venta';img.src=d.toDataURL('image/png');
-  try{await img.decode()}catch(e){}
-  if(!document.body.contains(w))return;
-  const paperW=Math.min(330,w.clientWidth-24);img.style.width=(paperW*d.width/c.width)+'px';
-  w.innerHTML='';w.appendChild(img);
-  if(!matchMedia('(prefers-reduced-motion: reduce)').matches&&img.animate)
-    img.animate([{transform:'translateY(-100%)'},{transform:'translateY(0)'}],{duration:1100,easing:'cubic-bezier(.35,.6,.3,1)'});
+  const blob=await new Promise(r=>d.toBlob(r,'image/png'));
+  if(printUrl)URL.revokeObjectURL(printUrl);printUrl=URL.createObjectURL(blob);
+  const img=new Image();img.alt='Ticket de la venta';img.src=printUrl;
+  try{await img.decode()}catch(e){await new Promise(r=>{if(img.complete)r();else{img.onload=r;img.onerror=r}})}
+  // esperar a que la ventana termine de subir: Safari ignora la animación si se mete a la mitad
+  const wait=360-(Date.now()-openedAt);if(wait>0)await new Promise(r=>setTimeout(r,wait));
+  const w=$('#tkwrap');if(!w||!document.body.contains(w))return;
+  const paperW=Math.max(200,Math.min(330,w.clientWidth-24));img.style.width=(paperW*d.width/c.width)+'px';
+  const paper=document.createElement('div');paper.className='paper';paper.appendChild(img);
+  w.replaceChildren(paper);
+  if(matchMedia('(prefers-reduced-motion: reduce)').matches)return;
+  void paper.offsetHeight;
+  requestAnimationFrame(()=>requestAnimationFrame(()=>paper.classList.add('printing')));
 }
 async function openTicket(sale,fresh){
-  let resolveBlob;currentTicket={sale,file:null,blobP:new Promise(r=>resolveBlob=r)};
+  let resolveBlob;const openedAt=Date.now();currentTicket={sale,file:null,blobP:new Promise(r=>resolveBlob=r)};
   const fol=folioStr(sale.folio).slice(1);
   $('#modal').innerHTML=`<div class="modal" data-act="close-modal"><div class="sheet" role="dialog" aria-label="Ticket">
     ${fresh?`<div class="done"><span class="ok">${icon('i-check',22)}</span><div><div style="font-weight:700;font-size:18px">Cobrado ${money(sale.total)}</div><div class="sub">${METHOD_LABEL(sale.method)}${sale.received?' · cambio '+money(sale.received-sale.total):''} · folio #${fol}</div></div></div>`:`<h2>Ticket #${fol}</h2>`}
@@ -268,14 +274,14 @@ async function openTicket(sale,fresh){
       <button class="btn ghost" data-act="save-ticket-img">${icon('i-save',18)} Guardar</button>
       <button class="btn ghost" data-act="copy-image">${icon('i-copy',18)} Copiar imagen</button>
     </div>
-    <button class="btn primary" style="padding:16px;font-size:17px" data-act="close-modal">${fresh?'Nueva orden':'Cerrar'}</button>
+    <button class="btn primary" style="padding:16px;font-size:17px" data-act="${fresh?'new-order':'close-modal'}">${fresh?'Nueva orden':'Cerrar'}</button>
   </div></div>`;
   try{
     const c=await drawTicket(sale);
     if(!currentTicket||currentTicket.sale!==sale)return;
     const blob=await new Promise(r=>c.toBlob(r,'image/png'));
     resolveBlob(blob);currentTicket.file=new File([blob],ticketName(sale)+'.png',{type:'image/png'});
-    await showPrinted(c);
+    await showPrinted(c,openedAt);
   }catch(e){const w=$('#tkwrap');if(w)w.innerHTML=`<pre class="sel mono" style="white-space:pre-wrap;font-size:13px;margin:0">${esc(ticketText(sale))}</pre>`}
 }
 async function shareTicket(){
@@ -513,10 +519,15 @@ function closeOrderSheet(){
   o.classList.add('leave');const sc=$('#orderhost .scrim');if(sc)sc.classList.add('leave');
   setTimeout(()=>{S.orderOpen=false;renderOrder()},200);
 }
-function closeModal(){
-  const m=$('#modal .modal');if(!m){$('#modal').innerHTML='';return}
-  m.classList.add('leave');setTimeout(()=>{if($('#modal .modal.leave'))$('#modal').innerHTML=''},190);
+function resetModal(){
+  const old=$('#modal');const n=document.createElement('div');n.id='modal';old.replaceWith(n);
+}
+function closeModal(newOrder){
   currentTicket=null;tendered=0;
+  const m=$('#modal .modal');
+  const done=()=>{resetModal();if(newOrder){clearOrder();S.orderOpen=false;S.cat='all';window.scrollTo(0,0);render()}};
+  if(!m){done();return}
+  m.classList.add('leave');setTimeout(done,190);
 }
 
 /* ---------- órdenes en espera (tablet) ---------- */
@@ -921,6 +932,7 @@ document.addEventListener('click',e=>{
     case 'clear-order':clearOrder();render();break;
     case 'confirm-cash':{const total=cartTotal();const v=tendered>0?tendered:total;$('#modal').innerHTML='';finalize('cash',v>=total?v:0);break}
     case 'close-modal':closeModal();break;
+    case 'new-order':closeModal(true);break;
     case 'share-ticket':shareTicket();break;
     case 'save-ticket-img':saveTicketImg();break;
     case 'copy-image':copyImage();break;
