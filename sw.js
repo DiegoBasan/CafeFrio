@@ -1,5 +1,5 @@
 // Café Frío · funciona sin internet después de la primera visita
-const CACHE='cafefrio-v7';
+const CACHE='cafefrio-v6';
 const SHELL=['./','index.html','app.css','app.js','vendor/qrcode.js','manifest.webmanifest','logo.svg',
   'icons/apple-touch-icon.png','icons/icon-192.png','icons/icon-512.png','icons/favicon-32.png',
   'img/cold-brew-clasico.jpg','img/cold-brew-vainilla.jpg','img/cold-brew-horchata.jpg','img/brew-chai.jpg',
