@@ -8,10 +8,10 @@ const METHOD_LABEL=m=>m==='mixed'?'Mixto':m==='mp'?'Tarjeta':(METHODS[m]?.label|
 function paidBy(s){const m=s.method==='mp'?'card':s.method;if(m==='mixed'&&Array.isArray(s.payments))return s.payments.map(p=>[p.method,+p.amount||0]);return [[m,+s.total||0]]}
 const DISC=[0,10,15,20];const TIPS=[0,10,15];
 const TABS=[['caja','Caja','i-caja'],['ventas','Ventas','i-receipt'],['menu','Menú','i-box'],['numeros','Números','i-chart'],['mp','M. Pago','i-mp']];
-const DEF_TICKET={title:'Café Frío',subtitle:'Cold brew · Chihuahua',footer:'¡Gracias por tu visita! Nos vemos en la combi.',ig:'@somoscafefrio',showLogo:true};
-const COLS=['products','sales','entries','mp','config'];
+const DEF_TICKET={title:'Café Frío',subtitle:'Cold brew · Chihuahua',footer:'¡Gracias por tu visita! Nos vemos en la combi.',ig:'@somoscafefrio',showLogo:true,showQR:true};
+const COLS=['products','sales','entries','mp','config','cortes'];
 
-const S={products:[],sales:[],entries:[],mp:[],config:[],tab:'caja',cat:'all',cart:{},order:[],customer:'',range:7,day:dayKey(Date.now()),
+const S={products:[],sales:[],entries:[],mp:[],config:[],cortes:[],tab:'caja',cat:'all',cart:{},order:[],customer:'',range:7,day:dayKey(Date.now()),
   orderOpen:false,ready:false,disc:0,tip:0,adjOpen:false,confirm:null,busy:false,search:'',searchOpen:false,featured:false};
 
 /* ---------- utils ---------- */
@@ -22,7 +22,7 @@ function money(n){n=Math.round((+n||0)*100)/100;const int=Number.isInteger(n);re
 function dayKey(ts){const d=new Date(ts);return d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0')+'-'+String(d.getDate()).padStart(2,'0')}
 function startOfDay(ts){const d=new Date(ts);d.setHours(0,0,0,0);return d.getTime()}
 function hhmm(ts){return new Date(ts).toLocaleTimeString('es-MX',{hour:'2-digit',minute:'2-digit',hour12:false})}
-function longDate(ts){return new Date(ts).toLocaleDateString('es-MX',{weekday:'long',day:'numeric',month:'long'})}
+function longDate(ts){const t=new Date(ts).toLocaleDateString('es-MX',{weekday:'long',day:'numeric',month:'long'});return t.charAt(0).toUpperCase()+t.slice(1)}
 function uid(){return Date.now().toString(36)+Math.random().toString(36).slice(2,8)}
 function icon(id,size=22){return `<svg width="${size}" height="${size}" aria-hidden="true"><use href="#${id}"/></svg>`}
 function thumb(p){return p&&p.photo?`<img src="${esc(p.photo)}" alt="" draggable="false">`:`<svg viewBox="0 0 120 120" aria-hidden="true"><use href="#${CATS[p&&p.cat]?.ph||'ph-cold'}"/></svg>`}
@@ -34,7 +34,7 @@ const ticketCfg=()=>Object.assign({},DEF_TICKET,(S.config.find(c=>c.id==='ticket
 const norm=s=>String(s||'').toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g,'');
 
 /* ---------- almacenamiento en el dispositivo (IndexedDB, con respaldo en localStorage) ---------- */
-let mem={products:{},sales:{},entries:{},mp:{},config:{}};
+let mem={products:{},sales:{},entries:{},mp:{},config:{},cortes:{}};
 let idb=null;
 function openIDB(){return new Promise(res=>{try{const r=indexedDB.open('cafefrio',1);r.onupgradeneeded=()=>r.result.createObjectStore('kv');r.onsuccess=()=>res(r.result);r.onerror=()=>res(null)}catch(e){res(null)}})}
 function idbGet(k){return new Promise(res=>{try{const t=idb.transaction('kv').objectStore('kv').get(k);t.onsuccess=()=>res(t.result);t.onerror=()=>res(undefined)}catch(e){res(undefined)}})}
@@ -160,7 +160,7 @@ async function drawTicket(sale){
   const logo=cfg.showLogo?await getLogo():null;const peng=await getPeng();
   let Hfinal=0;
   const run=(ctx)=>{
-    let y=P+6;const C=W/2;
+    let y=P;const C=W/2;
     ctx.fillStyle='#ffffff';ctx.fillRect(0,0,W,4000);
     if(Hfinal&&peng){ctx.save();ctx.globalAlpha=.04;const ph=Math.min(Hfinal*.78,860),pw=ph*430/500;ctx.translate(W*.56,Hfinal*.56);ctx.rotate(-.12);try{ctx.drawImage(peng,-pw/2,-ph/2,pw,ph)}catch(e){}ctx.restore()}
     ctx.fillStyle='#111111';ctx.textBaseline='alphabetic';
@@ -192,14 +192,21 @@ async function drawTicket(sale){
     if(sale.received){kv('Recibido',money(sale.received));kv('Cambio',money(sale.received-sale.total))}
     dash();ctx.fillStyle='#111';ctx.textAlign='center';
     if(cfg.footer){ctx.font=`400 19px ${mono}`;for(const l of wrap(ctx,cfg.footer,W-2*P)){ctx.fillText(l,C,y+18);y+=27}}
-    if(cfg.ig){ctx.font=`600 20px ${mono}`;y+=6;ctx.fillText(cfg.ig,C,y+18);y+=28}
+    if(cfg.ig&&cfg.showQR&&window.qrcode){
+      try{const handle=cfg.ig.replace(/^@/,'').trim();const q=window.qrcode(0,'M');q.addData('https://instagram.com/'+handle);q.make();
+        const n=q.getModuleCount(),size=150,cell=size/n,x0=C-size/2;y+=16;
+        ctx.fillStyle='#ffffff';ctx.fillRect(x0-8,y-8,size+16,size+16);ctx.fillStyle='#111';
+        for(let r=0;r<n;r++)for(let c=0;c<n;c++)if(q.isDark(r,c))ctx.fillRect(x0+c*cell,y+r*cell,Math.ceil(cell),Math.ceil(cell));
+        y+=size+16;ctx.font=`400 16px ${mono}`;ctx.fillStyle='#555';ctx.fillText('Síguenos',C,y+14);y+=22}catch(e){}
+    }
+    if(cfg.ig){ctx.fillStyle='#111';ctx.font=`600 20px ${mono}`;y+=4;ctx.fillText(cfg.ig,C,y+18);y+=28}
     return y+P-6;
   };
   const probe=document.createElement('canvas');probe.width=W;probe.height=4000;const H=Math.ceil(run(probe.getContext('2d')))+14;Hfinal=H;
   const c=document.createElement('canvas');c.width=W*K;c.height=H*K;const ctx=c.getContext('2d');ctx.scale(K,K);run(ctx);
-  // bordes de papel cortado arriba y abajo
+  // borde de papel cortado abajo
   ctx.globalCompositeOperation='destination-out';ctx.beginPath();
-  for(let x=0;x<=W;x+=16){ctx.moveTo(x,H);ctx.lineTo(x+8,H-10);ctx.lineTo(x+16,H);ctx.moveTo(x,0);ctx.lineTo(x+8,10);ctx.lineTo(x+16,0)}
+  for(let x=0;x<=W;x+=16){ctx.moveTo(x,H);ctx.lineTo(x+8,H-10);ctx.lineTo(x+16,H)}
   ctx.fill();ctx.globalCompositeOperation='source-over';
   return c;
 }
@@ -246,10 +253,12 @@ async function shareTicket(){
   }catch(e){if(e&&e.name==='AbortError')return}
   saveTicketImg();
 }
-function saveTicketImg(){
-  const f=currentTicket&&currentTicket.file;if(!f){toast('Espera a que termine el ticket');return}
-  const a=document.createElement('a');a.href=URL.createObjectURL(f);a.download=f.name;document.body.appendChild(a);a.click();a.remove();toast('Ticket guardado: '+f.name);
+async function saveFile(f,hint){
+  if(!f){toast('Espera a que termine de generarse');return}
+  try{if(navigator.canShare&&navigator.canShare({files:[f]})){toast(hint);await navigator.share({files:[f]});return}}catch(e){if(e&&e.name==='AbortError')return}
+  const a=document.createElement('a');a.href=URL.createObjectURL(f);a.download=f.name;document.body.appendChild(a);a.click();a.remove();toast('Descargado: '+f.name);
 }
+function saveTicketImg(){saveFile(currentTicket&&currentTicket.file,'Elige “Guardar imagen” para mandarlo a Fotos')}
 function copyImage(){
   if(!currentTicket)return;
   try{
@@ -380,13 +389,13 @@ function render(){
   renderOrder();
 }
 function viewCaja(){
-  const all=sortedProducts().filter(p=>p.active!==false);
+  const all=sortedProducts().filter(p=>p.active!==false&&p.today!==false);
   const cats=Object.keys(CATS).filter(c=>all.some(p=>p.cat===c));
   const q=norm(S.search.trim());
   const ps=all.filter(p=>(S.cat==='all'||p.cat===S.cat)&&(!S.featured||p.featured)&&(!q||norm(p.name).includes(q)));
   let body;
   if(!S.ready)body=`<div class="empty">Cargando el menú…</div>`;
-  else if(!all.length)body=`<div class="empty"><div><b>No hay productos en el menú.</b><br>Agrégalos en la pestaña Menú, con su foto, y aparecerán aquí listos para cobrar.</div></div>`;
+  else if(!all.length)body=`<div class="empty"><div><b>No hay productos para hoy.</b><br>En Menú → Menú de hoy elige qué tienen disponible y aparecerá aquí.</div></div>`;
   else if(!ps.length)body=`<div class="empty">${S.featured?'No hay productos destacados con este filtro. Marca la estrella en Menú para destacarlos.':'Ningún producto coincide con la búsqueda.'}</div>`;
   else body=`<div class="grid">${ps.map(p=>{const n=S.cart[p.id]||0;const hasS=typeof p.stock==='number';const out=hasS&&p.stock<=0;
     return `<button class="tile ${n?'on':''} ${out?'out':''}" data-tile="${p.id}" aria-label="Agregar ${esc(p.name)}"><span class="ph">${thumb(p)}</span><span class="meta"><span class="tn">${esc(p.name)}</span><span class="tp num">${money(p.price)}</span></span>${n?`<span class="q">${n}</span>`:''}${hasS?`<span class="stk ${p.stock<=5?'low':''}">${p.stock}</span>`:''}</button>`}).join('')}</div>
@@ -477,6 +486,67 @@ function setTender(v){tendered=v;const total=cartTotal();const c=$('#chg');if(!c
   c.innerHTML=v>=total?`Cambio <b class="num">${money(v-total)}</b>`:`Faltan <b class="num">${money(total-v)}</b>`;
   $('#cashgo').disabled=v<total}
 
+/* ---------- corte de caja ---------- */
+function dayStats(d0){
+  const list=S.sales.filter(s=>s.ts>=d0&&s.ts<d0+DAY);const by={cash:0,card:0,transfer:0};
+  list.forEach(s=>paidBy(s).forEach(([m,a])=>{if(m in by)by[m]+=a}));
+  return {list,by,total:list.reduce((a,s)=>a+s.total,0),tips:list.reduce((a,s)=>a+(+s.tip||0),0),disc:list.filter(s=>s.method!=='gift').reduce((a,s)=>a+(+s.discount||0),0),
+    gifts:list.filter(s=>s.method==='gift'),orders:list.filter(s=>s.method!=='gift').length};
+}
+function lastFondo(){const c=[...S.cortes].sort((a,b)=>b.ts-a.ts)[0];return c?c.fondo:500}
+function openCorte(){
+  const d0=new Date(S.day+'T00:00:00').getTime();const st=dayStats(d0);const prev=mem.cortes[S.day];
+  const fondo=prev?prev.fondo:lastFondo();
+  $('#modal').innerHTML=`<div class="modal" data-act="close-modal"><div class="sheet" role="dialog" aria-label="Corte de caja">
+    <h2>Corte de caja</h2><div class="sub">${esc(longDate(d0))} · ${st.orders} órdenes</div>
+    <div class="cortebox">
+      <div><span>Efectivo</span><b class="num">${money(st.by.cash)}</b></div>
+      <div><span>Tarjeta</span><b class="num">${money(st.by.card)}</b></div>
+      <div><span>Transferencia</span><b class="num">${money(st.by.transfer)}</b></div>
+      ${st.tips?`<div><span>Propinas (incluidas)</span><b class="num">${money(st.tips)}</b></div>`:''}
+      ${st.disc?`<div><span>Descuentos dados</span><b class="num">−${money(st.disc)}</b></div>`:''}
+      ${st.gifts.length?`<div><span>Cortesías</span><b class="num">${st.gifts.length}</b></div>`:''}
+      <div class="tt"><span>Total vendido</span><b class="num">${money(st.total)}</b></div>
+    </div>
+    <div class="row">
+      <div class="field"><label for="ct-fondo">Fondo inicial</label><input id="ct-fondo" inputmode="decimal" value="${fondo}"></div>
+      <div class="field"><label for="ct-contado">Efectivo contado</label><input id="ct-contado" inputmode="decimal" placeholder="$0" value="${prev?prev.contado:''}"></div>
+    </div>
+    <div class="changebox" id="ct-res"></div>
+    <div class="row"><button class="btn ghost" data-act="share-corte">${icon('i-share',18)} Compartir</button><button class="btn primary" data-act="save-corte">Guardar corte</button></div>
+  </div></div>`;
+  updCorte();
+}
+function corteData(){const d0=new Date(S.day+'T00:00:00').getTime();const st=dayStats(d0);const fondo=parseAmount($('#ct-fondo').value)||0;const contado=parseAmount($('#ct-contado').value);
+  const esperado=fondo+st.by.cash;return {d0,st,fondo,contado:isFinite(contado)?contado:null,esperado,dif:isFinite(contado)?contado-esperado:null}}
+function updCorte(){const c=corteData();const el=$('#ct-res');if(!el)return;
+  el.innerHTML=`Debe haber <b class="num">${money(c.esperado)}</b>`+(c.dif===null?'':`<br><span style="font-size:15px">${Math.abs(c.dif)<0.5?'La caja cuadra':c.dif>0?'Sobran '+money(c.dif):'Faltan '+money(-c.dif)}</span>`)}
+async function saveCorte(){const c=corteData();if(c.contado===null){toast('Escribe cuánto efectivo contaste');return}
+  mem.cortes[S.day]={ts:Date.now(),day:S.day,fondo:c.fondo,contado:c.contado,esperado:c.esperado,dif:c.dif,total:c.st.total,...c.st.by};
+  await persist('cortes');sync();$('#modal').innerHTML='';render();toast(Math.abs(c.dif)<0.5?'Corte guardado: la caja cuadra':'Corte guardado: '+(c.dif>0?'sobran ':'faltan ')+money(Math.abs(c.dif)))}
+async function shareCorte(){
+  const c=corteData();const W=576,P=40,K=2,mono='"IBM Plex Mono",Menlo,monospace';
+  const lines=[['Efectivo',money(c.st.by.cash)],['Tarjeta',money(c.st.by.card)],['Transferencia',money(c.st.by.transfer)]];
+  if(c.st.tips)lines.push(['Propinas',money(c.st.tips)]);if(c.st.disc)lines.push(['Descuentos','−'+money(c.st.disc)]);if(c.st.gifts.length)lines.push(['Cortesías',String(c.st.gifts.length)]);
+  const lines2=[['Fondo inicial',money(c.fondo)],['Debe haber',money(c.esperado)]];if(c.contado!==null){lines2.push(['Contado',money(c.contado)]);lines2.push([Math.abs(c.dif)<0.5?'Cuadra':c.dif>0?'Sobran':'Faltan',money(Math.abs(c.dif))])}
+  const logo=await getLogo();
+  const run=ctx=>{let y=P;const C=W/2;ctx.fillStyle='#fff';ctx.fillRect(0,0,W,3000);
+    const lw=300,lh=lw*527/1115;try{ctx.drawImage(logo,C-lw/2,y,lw,lh)}catch(e){}y+=lh+20;
+    ctx.fillStyle='#111';ctx.textAlign='center';ctx.font=`600 26px ${mono}`;ctx.fillText('CORTE DE CAJA',C,y+22);y+=36;
+    ctx.font=`400 18px ${mono}`;ctx.fillStyle='#444';ctx.fillText(new Date(c.d0).toLocaleDateString('es-MX',{weekday:'long',day:'numeric',month:'long',year:'numeric'}),C,y+16);y+=26;ctx.fillText(c.st.orders+' órdenes',C,y+16);y+=30;
+    const dash=()=>{ctx.strokeStyle='#999';ctx.setLineDash([6,6]);ctx.beginPath();ctx.moveTo(P,y);ctx.lineTo(W-P,y);ctx.stroke();ctx.setLineDash([]);y+=22};
+    const kv=(k,v,b)=>{ctx.font=`${b?600:400} ${b?24:20}px ${mono}`;ctx.fillStyle=b?'#111':'#333';ctx.textAlign='left';ctx.fillText(k,P,y+18);ctx.textAlign='right';ctx.fillText(v,W-P,y+18);y+=b?36:30};
+    dash();lines.forEach(([k,v])=>kv(k,v));y+=4;kv('TOTAL',money(c.st.total),true);dash();lines2.forEach(([k,v],i)=>kv(k,v,i===lines2.length-1&&c.contado!==null));
+    return y+P};
+  const pr=document.createElement('canvas');pr.width=W;pr.height=3000;const H=Math.ceil(run(pr.getContext('2d')));
+  const cv=document.createElement('canvas');cv.width=W*K;cv.height=H*K;const ctx=cv.getContext('2d');ctx.scale(K,K);run(ctx);
+  ctx.globalCompositeOperation='destination-out';ctx.beginPath();for(let x=0;x<=W;x+=16){ctx.moveTo(x,H);ctx.lineTo(x+8,H-10);ctx.lineTo(x+16,H)}ctx.fill();
+  const blob=await new Promise(r=>cv.toBlob(r,'image/png'));const d=new Date(c.d0);const p2=n=>String(n).padStart(2,'0');
+  const f=new File([blob],`CafeFrio Corte ${p2(d.getDate())}-${p2(d.getMonth()+1)}-${String(d.getFullYear()).slice(2)}.png`,{type:'image/png'});
+  try{if(navigator.canShare&&navigator.canShare({files:[f]})){await navigator.share({files:[f],title:f.name.replace('.png','')});return}}catch(e){if(e&&e.name==='AbortError')return}
+  const a=document.createElement('a');a.href=URL.createObjectURL(f);a.download=f.name;document.body.appendChild(a);a.click();a.remove();
+}
+
 function saleRow(s){
   const items=(s.items||[]).map(i=>(i.qty>1?i.qty+'× ':'')+i.name).join(', ');const cf=S.confirm===s.id;
   return `<div class="item click" data-ticket="${s.id}"><span class="time">${hhmm(s.ts)}</span><div style="min-width:0"><div class="t1">${s.customer?esc(s.customer)+' · ':''}${esc(items||'Venta')}</div><div class="t2"><span class="pill ${s.method==='card'||s.method==='mp'?'acc':''}">${METHOD_LABEL(s.method)}</span>${s.folio?' · '+folioStr(s.folio):''}${s.discount&&s.method!=='gift'?' · −'+money(s.discount):''}${s.tip?' · propina '+money(s.tip):''}</div></div>
@@ -488,7 +558,7 @@ function viewSales(){
   const tips=list.reduce((a,s)=>a+(+s.tip||0),0),gifts=list.filter(s=>s.method==='gift').length;
   const t=dayKey(Date.now()),y=dayKey(Date.now()-DAY);
   return `<div class="section">
-    <div><h1 class="h1">Ventas</h1><div class="sub" style="text-transform:capitalize">${esc(longDate(d0))}</div></div>
+    <div><h1 class="h1">Ventas</h1><div class="sub">${esc(longDate(d0))}</div></div>
     <div class="row" style="align-items:flex-end">
       <div class="chips" style="flex:0 0 auto;min-width:0"><button class="chip" data-day="${t}" aria-pressed="${S.day===t}">Hoy</button><button class="chip" data-day="${y}" aria-pressed="${S.day===y}">Ayer</button></div>
       <div class="field" style="max-width:220px"><label for="daypick">Otro día</label><input type="date" id="daypick" value="${S.day}"></div>
@@ -497,6 +567,7 @@ function viewSales(){
       <div class="kpi hero"><span class="l">Total del día</span><span class="v num">${money(tot)}</span><span class="d">${list.length} ${list.length===1?'venta':'ventas'}${tips?' · '+money(tips)+' en propinas':''}${gifts?' · '+gifts+' cortesía'+(gifts>1?'s':''):''}</span></div>
       ${['cash','card','transfer'].map(k=>`<div class="kpi"><span class="l">${METHODS[k].label}</span><span class="v num">${money(by[k]||0)}</span></div>`).join('')}
     </div>
+    ${(()=>{const c=mem.cortes[S.day];return `<button class="cortebtn" data-act="corte"><span>${icon('i-receipt',20)}</span><span style="flex:1;text-align:left"><b>Corte de caja</b><br><span class="sub">${c?(Math.abs(c.dif)<0.5?'Guardado · la caja cuadró':'Guardado · '+(c.dif>0?'sobraron ':'faltaron ')+money(Math.abs(c.dif))):'Cuenta el efectivo y cierra el día'}</span></span><span aria-hidden="true">›</span></button>`})()}
     <div class="panel">${list.length?`<div class="sub" style="margin-bottom:4px">Toca una venta para ver o compartir su ticket.</div><div class="list">${list.map(saleRow).join('')}</div>`:`<div class="empty">No hay ventas registradas este día.</div>`}</div>
   </div>`;
 }
@@ -505,6 +576,11 @@ function viewMenu(){
   return `<div class="section">
     <div class="row" style="align-items:center"><div><h1 class="h1">Menú</h1><div class="sub">${ps.length} productos · fotos, precios e inventario</div></div>
     <button class="btn primary" style="flex:0 0 auto" data-act="new-product">${icon('i-plus',18)} Nuevo producto</button></div>
+    ${(()=>{const act=ps.filter(p=>p.active!==false);const on=act.filter(p=>p.today!==false).length;return `<div class="panel">
+      <div class="row" style="align-items:center;margin-bottom:10px"><div><h3 style="margin:0">Menú de hoy</h3><div class="sub">${on} de ${act.length} disponibles · toca para prender o apagar</div></div>
+      <div style="display:flex;gap:6px;flex:0 0 auto"><button class="btn ghost" style="padding:8px 12px;font-size:13px" data-act="today-all">Todo</button><button class="btn ghost" style="padding:8px 12px;font-size:13px" data-act="today-none">Nada</button></div></div>
+      <div class="todaygrid">${act.map(p=>`<button class="todaytile ${p.today!==false?'on':''}" data-today="${p.id}" aria-pressed="${p.today!==false}"><span class="th">${thumb(p)}</span><span class="tn">${esc(p.name)}</span><span class="ck">${icon('i-check',14)}</span></button>`).join('')}</div>
+    </div>`})()}
     ${Object.keys(CATS).map(c=>{const list=ps.filter(p=>p.cat===c);return `<div class="panel"><h3>${CATS[c].label}</h3>${list.length?`<div class="list">${list.map(p=>{const m=p.price>0&&p.cost>0?Math.round((1-p.cost/p.price)*100):null;
       return `<div class="item prodrow"><span class="th">${thumb(p)}</span><div style="min-width:0"><div class="t1">${esc(p.name)}${p.featured?' <span class="pill acc">destacado</span>':''}${p.active===false?' <span class="pill">oculto</span>':''}</div><div class="t2">${money(p.price)} · costo ${money(p.cost||0)}${m!==null?' · margen '+m+'%':''}${typeof p.stock==='number'?' · '+p.stock+' en stock':''}${p.code?' · código '+esc(p.code):''}</div></div>
       <div style="display:flex;gap:6px">${typeof p.stock==='number'?`<button class="iconbtn" data-entry="${p.id}" aria-label="Entrada de inventario">${icon('i-plus',18)}</button>`:''}<button class="iconbtn" data-edit="${p.id}" aria-label="Editar ${esc(p.name)}">${icon('i-edit',18)}</button></div></div>`}).join('')}</div>`:`<div class="sub">${c==='hot'?'Para la temporada de invierno: agrega aquí los cafés calientes cuando estén listos.':'Sin productos en esta categoría.'}</div>`}</div>`}).join('')}
@@ -518,6 +594,7 @@ function viewMenu(){
         <div class="field"><label for="tk-ig">Instagram</label><input id="tk-ig" value="${esc(cfg.ig)}"></div>
       </div>
       <label class="check" style="margin-top:10px"><input type="checkbox" id="tk-logo" ${cfg.showLogo?'checked':''}> Mostrar el logo en el ticket</label>
+      <label class="check" style="margin-top:6px"><input type="checkbox" id="tk-qr" ${cfg.showQR?'checked':''}> Código QR a su Instagram</label>
       <div class="row" style="margin-top:12px"><button class="btn ghost" style="flex:0 0 auto" data-act="preview-ticket">Ver ejemplo</button><button class="btn ink" style="flex:0 0 auto" data-act="save-ticket">Guardar ticket</button></div>
     </div>
     <div class="panel"><h3>Datos y respaldo</h3>
@@ -658,7 +735,7 @@ function openEntry(id){const p=prodById(id);if(!p)return;
   <div class="row"><button type="button" class="btn ghost" data-act="close-modal">Cancelar</button><button type="submit" class="btn primary" data-act="save-entry" data-id="${id}">Sumar</button></div></form></div>`}
 async function saveEntry(id){const p=prodById(id);const q=parseInt($('#e-qty').value,10);if(!(q>0)){toast('Escribe cuántas piezas llegaron');return}const c=parseAmount($('#e-cost').value);
   $('#modal').innerHTML='';mem.products[id].stock=(p.stock||0)+q;await persist('products');await put('entries',uid(),{ts:Date.now(),pid:id,name:p.name,qty:q,cost:c>0?c:0});toast('+'+q+' '+p.name)}
-function readTicketForm(){return {title:$('#tk-title').value.trim(),subtitle:$('#tk-sub').value.trim(),footer:$('#tk-foot').value.trim(),ig:$('#tk-ig').value.trim(),showLogo:$('#tk-logo').checked}}
+function readTicketForm(){return {title:$('#tk-title').value.trim(),subtitle:$('#tk-sub').value.trim(),footer:$('#tk-foot').value.trim(),ig:$('#tk-ig').value.trim(),showLogo:$('#tk-logo').checked,showQR:$('#tk-qr').checked}}
 
 /* ---------- toque largo en productos: quitar de la orden ---------- */
 let lp=null,suppressClick=false;
@@ -691,6 +768,7 @@ document.addEventListener('click',e=>{
   if(d.confirm){S.confirm=d.confirm;render();return}
   if(d.delsale){S.confirm=null;deleteSale(d.delsale);return}
   if(d.ticket){const s=S.sales.find(x=>x.id===d.ticket);if(s)openTicket(s,false);return}
+  if(d.today){const p=mem.products[d.today];if(p){p.today=p.today===false;persist('products');sync();render()}return}
   if(d.edit){openProduct(d.edit);return}
   if(d.entry){openEntry(d.entry);return}
   if(d.mpsale){saleFromMP(d.mpsale);return}
@@ -703,6 +781,10 @@ document.addEventListener('click',e=>{
     case 'close-scan':closeScanner();break;
     case 'scan-again':{const b=$('#scanres');if(b)b.innerHTML='';if(scan)scan.busy=false;break}
     case 'scan-assign':{const pid=$('#scanpick').value;mem.products[pid].code=d.code;persist('products');sync();addItem(pid);toast('Código asignado a '+mem.products[pid].name);const b=$('#scanres');if(b)b.innerHTML='';if(scan)scan.busy=false;break}
+    case 'today-all':case 'today-none':{const v=d.act==='today-all';for(const p of Object.values(mem.products))p.today=v;persist('products');sync();render();toast(v?'Todo el menú disponible hoy':'Menú de hoy vacío: elige qué hay');break}
+    case 'corte':openCorte();break;
+    case 'save-corte':saveCorte();break;
+    case 'share-corte':shareCorte();break;
     case 'adj':S.adjOpen=!S.adjOpen;render();break;
     case 'confirm-mixed':{const total=cartTotal();const c=Math.min(parseAmount($('#mx-cash').value)||0,total);const o=$('#mx-other').value;$('#modal').innerHTML='';finalize('mixed',0,[{method:'cash',amount:c},{method:o,amount:Math.round((total-c)*100)/100}]);break}
     case 'confirm-gift':$('#modal').innerHTML='';finalize('gift');break;
@@ -730,6 +812,7 @@ document.addEventListener('input',e=>{
   if(e.target.id==='cust')S.customer=e.target.value;
   if(e.target.id==='q'){S.search=e.target.value;$('#main').innerHTML=viewCaja()}
   if(e.target.id==='mx-cash')updMixed();
+  if(e.target.id==='ct-fondo'||e.target.id==='ct-contado')updCorte();
   if(e.target.id==='tend-in'){document.querySelectorAll('#tender button').forEach(b=>b.setAttribute('aria-pressed','false'));setTender(parseAmount(e.target.value)||0)}
 });
 document.addEventListener('change',e=>{

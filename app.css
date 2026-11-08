@@ -210,8 +210,9 @@ nav.tabs .in{max-width:640px;margin:0 auto;display:grid;grid-template-columns:re
 .bigtot{font-family:var(--f-mono);font-size:40px;font-weight:600;text-align:center}
 .changebox{text-align:center;font-family:var(--f-mono);font-size:18px;padding:10px;border-radius:12px;background:var(--surface2)}
 .changebox b{font-size:26px}
-.ticketwrap{background:var(--tray);border-radius:16px;padding:22px 14px;display:flex;justify-content:center;background-image:radial-gradient(rgba(255,255,255,.07) 1px,transparent 1px);background-size:6px 6px}
-.ticketwrap img{width:100%;max-width:290px;height:auto;display:block;filter:drop-shadow(0 10px 14px var(--tray-shadow)) drop-shadow(0 2px 3px var(--tray-shadow));transform:rotate(-1.2deg);-webkit-touch-callout:default;-webkit-user-select:auto;user-select:auto}
+.ticketwrap{display:flex;justify-content:center;padding:6px 0 14px}
+.ticketwrap img{width:100%;max-width:330px;height:auto;display:block;filter:drop-shadow(0 12px 18px rgba(0,0,0,.16)) drop-shadow(0 1px 2px rgba(0,0,0,.18));-webkit-touch-callout:default;-webkit-user-select:auto;user-select:auto}
+:root.dark .ticketwrap img{filter:drop-shadow(0 12px 22px rgba(0,0,0,.7))}
 .ticketwrap .gen{padding:40px;color:var(--ink2);font-family:var(--f-mono);font-size:13px}
 .sharegrid{display:grid;grid-template-columns:1fr 1fr;gap:8px}
 .sharegrid .btn{font-size:14px;padding:13px 10px}
@@ -226,3 +227,22 @@ nav.tabs .in{max-width:640px;margin:0 auto;display:grid;grid-template-columns:re
 .scanbox .frame{position:absolute;inset:18%;border:3px solid rgba(255,255,255,.9);border-radius:18px;box-shadow:0 0 0 999px rgba(0,0,0,.35)}
 .toast{position:fixed;left:50%;transform:translateX(-50%);top:calc(14px + env(safe-area-inset-top,0px));z-index:90;background:var(--ink);color:var(--bg);padding:10px 16px;border-radius:14px;font-weight:600;font-size:14px;box-shadow:0 8px 24px rgba(0,0,0,.25);max-width:calc(100% - 32px)}
 @media (prefers-reduced-motion: reduce){*{transition:none!important;animation:none!important}}
+
+/* menú de hoy */
+.todaygrid{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:8px}
+@media (min-width:600px){.todaygrid{grid-template-columns:repeat(auto-fill,minmax(110px,1fr))}}
+.todaytile{position:relative;border:none;background:var(--bg);border-radius:12px;padding:0 0 6px;display:flex;flex-direction:column;gap:4px;overflow:hidden;box-shadow:0 0 0 1px var(--line) inset;opacity:.45;filter:grayscale(1)}
+.todaytile.on{opacity:1;filter:none;box-shadow:0 0 0 2px var(--accent) inset}
+.todaytile .th{display:block;aspect-ratio:1/1;max-width:100%;background:var(--surface2)}
+.todaytile .th img,.todaytile .th svg{width:100%;height:100%;object-fit:cover;display:block;color:var(--ink3)}
+.todaytile .tn{font-size:11px;font-weight:600;line-height:1.15;padding:0 6px;text-align:left}
+.todaytile .ck{position:absolute;top:5px;right:5px;width:20px;height:20px;border-radius:10px;background:var(--accent);color:var(--accent-ink);display:none;place-items:center}
+.todaytile.on .ck{display:grid}
+/* corte de caja */
+.cortebtn{display:flex;align-items:center;gap:12px;border:none;background:var(--surface);box-shadow:0 0 0 1px var(--line) inset;border-radius:16px;padding:14px 16px;font-size:15px;color:var(--ink)}
+.cortebtn>span:first-child{width:38px;height:38px;border-radius:12px;background:var(--accent-soft);color:var(--accent);display:grid;place-items:center;flex:none}
+.cortebox{display:flex;flex-direction:column;background:var(--bg);border-radius:14px;padding:6px 14px}
+.cortebox div{display:flex;justify-content:space-between;padding:8px 0;border-bottom:1px solid var(--line);font-size:14px}
+.cortebox div:last-child{border-bottom:none}
+.cortebox .tt{font-size:16px}
+.cortebox b{font-family:var(--f-mono)}
