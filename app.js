@@ -972,6 +972,13 @@ try{if(localStorage.getItem('cf-theme')==='dark'){document.documentElement.class
 render();
 (async()=>{
   await loadAll();await seedIfEmpty();await migrate();sync();S.ready=true;render();
-  if('serviceWorker' in navigator&&location.protocol==='https:'){try{navigator.serviceWorker.register('sw.js')}catch(e){}}
+  if('serviceWorker' in navigator&&location.protocol==='https:'){
+    try{
+      // busca versión nueva cada vez que se abre la app y recarga sola cuando la hay
+      const had=!!navigator.serviceWorker.controller;let reloaded=false;
+      navigator.serviceWorker.addEventListener('controllerchange',()=>{if(had&&!reloaded){reloaded=true;location.reload()}});
+      navigator.serviceWorker.register('sw.js',{updateViaCache:'none'}).then(r=>{r.update();document.addEventListener('visibilitychange',()=>{if(document.visibilityState==='visible')r.update()})});
+    }catch(e){}
+  }
 })();
 })();
