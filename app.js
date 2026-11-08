@@ -2,13 +2,17 @@
 'use strict';
 const DAY=86400000;
 const CATS={cold:{label:'Cold brew',ph:'ph-cold'},foam:{label:'Cold foam',ph:'ph-foam'},pay:{label:'Pay',ph:'ph-pay'},hot:{label:'Caliente',ph:'ph-hot'}};
-const METHODS={cash:{label:'Efectivo',icon:'i-cash',color:'var(--ink)'},mp:{label:'Mercado Pago',icon:'i-mp',color:'var(--accent)'},transfer:{label:'Transferencia',icon:'i-transfer',color:'var(--ink3)'}};
+const METHODS={cash:{label:'Efectivo',icon:'i-cash',color:'var(--ink)'},card:{label:'Tarjeta',icon:'i-card',color:'var(--accent)'},transfer:{label:'Transferencia',icon:'i-transfer',color:'var(--ink3)'},gift:{label:'Cortesía',icon:'i-gift',color:'var(--line)'}};
+const METHOD_LABEL=m=>m==='mixed'?'Mixto':m==='mp'?'Tarjeta':(METHODS[m]?.label||m);
+// cuánto se cobró por cada forma de pago en una venta (las mixtas se reparten)
+function paidBy(s){const m=s.method==='mp'?'card':s.method;if(m==='mixed'&&Array.isArray(s.payments))return s.payments.map(p=>[p.method,+p.amount||0]);return [[m,+s.total||0]]}
+const DISC=[0,10,15,20];const TIPS=[0,10,15];
 const TABS=[['caja','Caja','i-caja'],['ventas','Ventas','i-receipt'],['menu','Menú','i-box'],['numeros','Números','i-chart'],['mp','M. Pago','i-mp']];
 const DEF_TICKET={title:'Café Frío',subtitle:'Cold brew · Chihuahua',footer:'¡Gracias por tu visita! Nos vemos en la combi.',ig:'@somoscafefrio',showLogo:true};
 const COLS=['products','sales','entries','mp','config'];
 
 const S={products:[],sales:[],entries:[],mp:[],config:[],tab:'caja',cat:'all',cart:{},order:[],customer:'',range:7,day:dayKey(Date.now()),
-  orderOpen:false,ready:false,confirm:null,busy:false,search:'',searchOpen:false,featured:false};
+  orderOpen:false,ready:false,disc:0,tip:0,adjOpen:false,confirm:null,busy:false,search:'',searchOpen:false,featured:false};
 
 /* ---------- utils ---------- */
 const $=(s,r=document)=>r.querySelector(s);
@@ -65,6 +69,25 @@ const SEED=[
   ['p-amer','Americano','hot',45,10,null,7,'img/americano.jpg',false],
   ['p-latte','Latte','hot',60,16,null,8,'img/latte.jpg',false]
 ];
+const SEED_MORE=[
+  ['p-cbmoka','Cold brew moka','cold',85,24,null,4,'img/cold-brew-vainilla.jpg',false],
+  ['p-cbcan','Cold brew canela','cold',80,22,null,5,'img/cold-brew-clasico.jpg',false],
+  ['p-cb1l','Cold brew 1 litro','cold',220,60,10,6,'img/cold-brew-horchata.jpg',false],
+  ['p-foamva','Cold foam vainilla','foam',90,26,null,9,'img/brew-chai.jpg',false],
+  ['p-foamcar','Cold foam caramelo','foam',95,28,null,10,'img/apple-crunch.jpg',false],
+  ['p-cap','Capuchino','hot',55,14,null,13,'img/latte.jpg',false],
+  ['p-moka','Mocha','hot',65,18,null,14,'img/americano.jpg',false],
+  ['p-chai','Chai latte','hot',65,17,null,15,'img/latte.jpg',false],
+  ['p-choco','Chocolate caliente','hot',55,15,null,16,'img/americano.jpg',false]
+];
+async function migrate(){
+  const v=mem.config.meta?.seedv||1;if(v>=2)return;
+  for(const [id,name,cat,price,cost,stock,order,photo,featured] of SEED_MORE)if(!mem.products[id])mem.products[id]={name,cat,price,cost,stock,order,photo,featured,active:true,demo:true};
+  for(const s of Object.values(mem.sales))if(s.method==='mp')s.method='card';
+  const maxF=Object.values(mem.sales).reduce((m,s)=>Math.max(m,+s.folio||0),0);
+  mem.config.meta={...(mem.config.meta||{}),seedv:2,seq:Math.max(mem.config.meta?.seq||0,128,maxF)};
+  for(const c of ['products','sales','config'])await persist(c);
+}
 async function seedIfEmpty(){
   if(Object.keys(mem.products).length)return;
   for(const [id,name,cat,price,cost,stock,order,photo,featured] of SEED)mem.products[id]={name,cat,price,cost,stock,order,photo,featured,active:true};
@@ -79,8 +102,8 @@ async function seedIfEmpty(){
     for(let k=0;k<n;k++){const p=pick();const ex=items.find(x=>x.pid===p[0]);if(ex)ex.qty++;else items.push({pid:p[0],name:p[1],qty:1,price:p[3],cost:p[4]})}
     rows.push({ts:d.getTime(),items})}
   rows.sort((a,b)=>a.ts-b.ts);
-  rows.forEach((row,i)=>{const k=dayKey(row.ts);folios[k]=(folios[k]||0)+1;const total=row.items.reduce((s,x)=>s+x.qty*x.price,0);const m=rnd()<.5?'cash':rnd()<.8?'mp':'transfer';
-    mem.sales['demo-'+i]={...row,total,method:m,folio:folios[k],demo:true,...(m==='cash'?{received:[100,200,500].find(b=>b>=total)||total}:{})}});
+  rows.forEach((row,i)=>{const k=dayKey(row.ts);folios[k]=(folios[k]||0)+1;const total=row.items.reduce((s,x)=>s+x.qty*x.price,0);const m=rnd()<.5?'cash':rnd()<.8?'card':'transfer';
+    mem.sales['demo-'+i]={...row,subtotal:total,total,method:m,folio:i+1,demo:true,...(m==='cash'?{received:[100,200,500].find(b=>b>=total)||total}:{})}});
   for(const c of ['products','sales'])await persist(c);
 }
 
@@ -89,14 +112,22 @@ function addItem(pid){const p=prodById(pid);if(!p)return;if(!S.cart[pid])S.order
 function decItem(pid){S.cart[pid]=(S.cart[pid]||0)-1;if(S.cart[pid]<=0){delete S.cart[pid];S.order=S.order.filter(x=>x!==pid)}render()}
 function dropItem(pid){if(!S.cart[pid])return;const n=prodById(pid)?.name||'';delete S.cart[pid];S.order=S.order.filter(x=>x!==pid);buzz(25);toast('Quitado: '+n);render()}
 function cartItems(){return S.order.map(pid=>{const p=prodById(pid);const q=S.cart[pid];return p&&q>0?{pid,name:p.name,qty:q,price:+p.price||0,cost:+p.cost||0}:null}).filter(Boolean)}
-function cartTotal(){return cartItems().reduce((s,i)=>s+i.qty*i.price,0)}
-function clearOrder(){S.cart={};S.order=[];S.customer='';S.orderOpen=false}
-function nextFolio(){const d0=startOfDay(Date.now());const today=S.sales.filter(s=>s.ts>=d0);const mx=today.reduce((m,s)=>Math.max(m,+s.folio||0),0);return Math.max(mx,today.length)+1}
-async function finalize(method,received){
+function cartSubtotal(){return cartItems().reduce((s,i)=>s+i.qty*i.price,0)}
+function cartCalc(){const sub=cartSubtotal();const discount=Math.round(sub*S.disc)/100;const base=sub-discount;const tip=Math.round(base*S.tip)/100;return {sub,discount,tip,total:base+tip}}
+function cartTotal(){return cartCalc().total}
+function clearOrder(){S.cart={};S.order=[];S.customer='';S.orderOpen=false;S.disc=0;S.tip=0;S.adjOpen=false}
+function nextFolio(){return (mem.config.meta?.seq||0)+1}
+const folioStr=f=>'#'+String(f||0).padStart(4,'0');
+async function finalize(method,received,payments){
   const items=cartItems();if(!items.length||S.busy)return;
   S.busy=true;
-  const total=items.reduce((s,i)=>s+i.qty*i.price,0);
-  const sale={ts:Date.now(),items,total,method,folio:nextFolio()};
+  const c0=cartCalc();
+  const gift=method==='gift';
+  const total=gift?0:c0.total;
+  const folio=nextFolio();mem.config.meta={...(mem.config.meta||{}),seq:folio};await persist('config');
+  const sale={ts:Date.now(),items,subtotal:c0.sub,total,method,folio};
+  if(gift)sale.discount=c0.sub;else{if(c0.discount)sale.discount=c0.discount,sale.discPct=S.disc;if(c0.tip)sale.tip=c0.tip,sale.tipPct=S.tip}
+  if(payments)sale.payments=payments;
   const c=S.customer.trim();if(c)sale.customer=c.slice(0,40);
   if(method==='cash'&&received>0)sale.received=received;
   const id=uid();
@@ -117,6 +148,8 @@ async function deleteSale(id){
 
 /* ---------- ticket ---------- */
 let logoImg=null;
+let pengImg=null;
+async function getPeng(){if(pengImg)return pengImg;const d=$('#peng-path').getAttribute('d');const img=new Image();img.src='data:image/svg+xml;charset=utf-8,'+encodeURIComponent(`<svg xmlns="http://www.w3.org/2000/svg" viewBox="330 0 430 500" width="860" height="1000"><path fill="#000" fill-rule="evenodd" d="${d}"/></svg>`);try{await img.decode()}catch(e){await new Promise(r=>{img.onload=r;img.onerror=r})}pengImg=img;return img}
 function logoSVG(color){const d=$('#logo-path').getAttribute('d');return `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1115 527" width="1115" height="527"><path fill="${color}" fill-rule="evenodd" d="${d}"/></svg>`}
 async function getLogo(){if(logoImg)return logoImg;const img=new Image();img.src='data:image/svg+xml;charset=utf-8,'+encodeURIComponent(logoSVG('#111111'));try{await img.decode()}catch(e){await new Promise(r=>{img.onload=r;img.onerror=r})}logoImg=img;return img}
 function wrap(ctx,text,maxW){const words=String(text).split(/\s+/);const lines=[];let cur='';for(const w of words){const t=cur?cur+' '+w:w;if(ctx.measureText(t).width>maxW&&cur){lines.push(cur);cur=w}else cur=t}if(cur)lines.push(cur);return lines}
@@ -124,17 +157,20 @@ async function drawTicket(sale){
   const cfg=ticketCfg();
   try{await document.fonts.load('600 20px "IBM Plex Mono"');await document.fonts.load('400 20px "IBM Plex Mono"')}catch(e){}
   const W=576,P=40,K=2;const mono='"IBM Plex Mono",Menlo,monospace';
-  const logo=cfg.showLogo?await getLogo():null;
+  const logo=cfg.showLogo?await getLogo():null;const peng=await getPeng();
+  let Hfinal=0;
   const run=(ctx)=>{
-    let y=P;const C=W/2;
-    ctx.fillStyle='#ffffff';ctx.fillRect(0,0,W,4000);ctx.fillStyle='#111111';ctx.textBaseline='alphabetic';
+    let y=P+6;const C=W/2;
+    ctx.fillStyle='#ffffff';ctx.fillRect(0,0,W,4000);
+    if(Hfinal&&peng){ctx.save();ctx.globalAlpha=.04;const ph=Math.min(Hfinal*.78,860),pw=ph*430/500;ctx.translate(W*.56,Hfinal*.56);ctx.rotate(-.12);try{ctx.drawImage(peng,-pw/2,-ph/2,pw,ph)}catch(e){}ctx.restore()}
+    ctx.fillStyle='#111111';ctx.textBaseline='alphabetic';
     if(logo){const lw=380,lh=lw*527/1115;try{ctx.drawImage(logo,C-lw/2,y,lw,lh)}catch(e){}y+=lh+22}
     else if(cfg.title){ctx.font=`600 34px ${mono}`;ctx.textAlign='center';ctx.fillText(cfg.title,C,y+30);y+=50}
     ctx.textAlign='center';
     if(cfg.subtitle){ctx.font=`400 19px ${mono}`;for(const l of wrap(ctx,cfg.subtitle,W-2*P)){ctx.fillText(l,C,y+18);y+=26}}
     y+=10;ctx.font=`400 18px ${mono}`;ctx.fillStyle='#444';
     const ds=new Date(sale.ts).toLocaleDateString('es-MX',{day:'2-digit',month:'short',year:'numeric'})+' · '+hhmm(sale.ts);
-    ctx.textAlign='left';ctx.fillText(ds,P,y+18);ctx.textAlign='right';ctx.fillText('Folio #'+String(sale.folio||'—').padStart(3,'0'),W-P,y+18);y+=30;
+    ctx.textAlign='left';ctx.fillText(ds,P,y+18);ctx.textAlign='right';ctx.fillText('Folio '+folioStr(sale.folio),W-P,y+18);y+=30;
     if(sale.customer){ctx.textAlign='left';ctx.fillStyle='#111';ctx.font=`600 22px ${mono}`;ctx.fillText('Para: '+sale.customer,P,y+22);y+=34}
     const dash=()=>{y+=10;ctx.strokeStyle='#999';ctx.setLineDash([6,6]);ctx.lineWidth=1.5;ctx.beginPath();ctx.moveTo(P,y);ctx.lineTo(W-P,y);ctx.stroke();ctx.setLineDash([]);y+=20};
     dash();ctx.fillStyle='#111';
@@ -146,43 +182,50 @@ async function drawTicket(sale){
       y+=4;
     }
     dash();
-    ctx.font=`600 30px ${mono}`;ctx.textAlign='left';ctx.fillText('TOTAL',P,y+28);ctx.textAlign='right';ctx.fillText(money(sale.total),W-P,y+28);y+=46;
+    const sub=sale.subtotal??(sale.items||[]).reduce((a,i)=>a+i.qty*i.price,0);
+    const kv0=(k,v,col)=>{ctx.font=`400 19px ${mono}`;ctx.fillStyle=col||'#444';ctx.textAlign='left';ctx.fillText(k,P,y+18);ctx.textAlign='right';ctx.fillText(v,W-P,y+18);y+=28};
+    if(sale.discount||sale.tip){kv0('Subtotal',money(sub));if(sale.discount)kv0(sale.method==='gift'?'Cortesía':'Descuento'+(sale.discPct?' '+sale.discPct+'%':''),'−'+money(sale.discount));if(sale.tip)kv0('Propina'+(sale.tipPct?' '+sale.tipPct+'%':''),money(sale.tip));y+=6}
+    ctx.fillStyle='#111';ctx.font=`600 30px ${mono}`;ctx.textAlign='left';ctx.fillText('TOTAL',P,y+28);ctx.textAlign='right';ctx.fillText(money(sale.total),W-P,y+28);y+=46;
     ctx.font=`400 18px ${mono}`;ctx.fillStyle='#444';
     const kv=(k,v)=>{ctx.textAlign='left';ctx.fillText(k,P,y+18);ctx.textAlign='right';ctx.fillText(v,W-P,y+18);y+=28};
-    kv('Pago',METHODS[sale.method]?.label||sale.method);
+    if(sale.method==='mixed'&&sale.payments)sale.payments.forEach(p=>kv(METHOD_LABEL(p.method),money(p.amount)));else kv('Pago',METHOD_LABEL(sale.method));
     if(sale.received){kv('Recibido',money(sale.received));kv('Cambio',money(sale.received-sale.total))}
     dash();ctx.fillStyle='#111';ctx.textAlign='center';
     if(cfg.footer){ctx.font=`400 19px ${mono}`;for(const l of wrap(ctx,cfg.footer,W-2*P)){ctx.fillText(l,C,y+18);y+=27}}
     if(cfg.ig){ctx.font=`600 20px ${mono}`;y+=6;ctx.fillText(cfg.ig,C,y+18);y+=28}
     return y+P-6;
   };
-  const probe=document.createElement('canvas');probe.width=W;probe.height=4000;const H=Math.ceil(run(probe.getContext('2d')))+14;
+  const probe=document.createElement('canvas');probe.width=W;probe.height=4000;const H=Math.ceil(run(probe.getContext('2d')))+14;Hfinal=H;
   const c=document.createElement('canvas');c.width=W*K;c.height=H*K;const ctx=c.getContext('2d');ctx.scale(K,K);run(ctx);
-  ctx.globalCompositeOperation='destination-out';ctx.beginPath();for(let x=0;x<=W;x+=16){ctx.moveTo(x,H);ctx.lineTo(x+8,H-10);ctx.lineTo(x+16,H)}ctx.fill();ctx.globalCompositeOperation='source-over';
+  // bordes de papel cortado arriba y abajo
+  ctx.globalCompositeOperation='destination-out';ctx.beginPath();
+  for(let x=0;x<=W;x+=16){ctx.moveTo(x,H);ctx.lineTo(x+8,H-10);ctx.lineTo(x+16,H);ctx.moveTo(x,0);ctx.lineTo(x+8,10);ctx.lineTo(x+16,0)}
+  ctx.fill();ctx.globalCompositeOperation='source-over';
   return c;
 }
 function ticketText(s){
   const cfg=ticketCfg();const L=[];
   L.push(cfg.title||'Café Frío');if(cfg.subtitle)L.push(cfg.subtitle);
-  L.push(new Date(s.ts).toLocaleDateString('es-MX',{day:'2-digit',month:'short',year:'numeric'})+' '+hhmm(s.ts)+' · Folio #'+String(s.folio||'').padStart(3,'0'));
+  L.push(new Date(s.ts).toLocaleDateString('es-MX',{day:'2-digit',month:'short',year:'numeric'})+' '+hhmm(s.ts)+' · Folio '+folioStr(s.folio));
   if(s.customer)L.push('Para: '+s.customer);
   L.push('—');(s.items||[]).forEach(i=>L.push((i.qty>1?i.qty+'× ':'')+i.name+'  '+money(i.qty*i.price)));
-  L.push('—');L.push('TOTAL '+money(s.total)+' · '+(METHODS[s.method]?.label||''));
+  L.push('—');L.push('TOTAL '+money(s.total)+' · '+METHOD_LABEL(s.method));
   if(s.received)L.push('Recibido '+money(s.received)+' · Cambio '+money(s.received-s.total));
   if(cfg.footer)L.push(cfg.footer);if(cfg.ig)L.push(cfg.ig);
   return L.join('\n');
 }
 let currentTicket=null;
+function ticketName(s){const d=new Date(s.ts);const p=n=>String(n).padStart(2,'0');return `CafeFrio ${p(d.getDate())}-${p(d.getMonth()+1)}-${String(d.getFullYear()).slice(2)} ${folioStr(s.folio)}`}
 async function openTicket(sale,fresh){
-  currentTicket={sale,file:null};
-  const fol=String(sale.folio||'').padStart(3,'0');
+  let resolveBlob;currentTicket={sale,file:null,blobP:new Promise(r=>resolveBlob=r)};
+  const fol=folioStr(sale.folio).slice(1);
   $('#modal').innerHTML=`<div class="modal" data-act="close-modal"><div class="sheet" role="dialog" aria-label="Ticket">
-    ${fresh?`<div class="done"><span class="ok">${icon('i-check',22)}</span><div><div style="font-weight:700;font-size:18px">Cobrado ${money(sale.total)}</div><div class="sub">${METHODS[sale.method]?.label}${sale.received?' · cambio '+money(sale.received-sale.total):''} · folio #${fol}</div></div></div>`:`<h2>Ticket #${fol}</h2>`}
+    ${fresh?`<div class="done"><span class="ok">${icon('i-check',22)}</span><div><div style="font-weight:700;font-size:18px">Cobrado ${money(sale.total)}</div><div class="sub">${METHOD_LABEL(sale.method)}${sale.received?' · cambio '+money(sale.received-sale.total):''} · folio #${fol}</div></div></div>`:`<h2>Ticket #${fol}</h2>`}
     <div class="ticketwrap" id="tkwrap"><div class="gen">Generando ticket…</div></div>
     <div class="sharegrid">
-      <button class="btn ink wide" data-act="share-ticket">${icon('i-share',20)} Compartir ticket</button>
-      <button class="btn ghost" data-act="share-text">${icon('i-chat',18)} Enviar como texto</button>
-      <button class="btn ghost" data-act="copy-ticket">${icon('i-copy',18)} Copiar texto</button>
+      <button class="btn ink wide" data-act="share-ticket">${icon('i-share',20)} Compartir</button>
+      <button class="btn ghost" data-act="save-ticket-img">${icon('i-save',18)} Guardar</button>
+      <button class="btn ghost" data-act="copy-image">${icon('i-copy',18)} Copiar imagen</button>
     </div>
     <button class="btn primary" style="padding:16px;font-size:17px" data-act="close-modal">${fresh?'Nueva orden':'Cerrar'}</button>
   </div></div>`;
@@ -190,7 +233,7 @@ async function openTicket(sale,fresh){
     const c=await drawTicket(sale);
     if(!currentTicket||currentTicket.sale!==sale)return;
     const blob=await new Promise(r=>c.toBlob(r,'image/png'));
-    currentTicket.file=new File([blob],`ticket-cafe-frio-${fol}.png`,{type:'image/png'});
+    resolveBlob(blob);currentTicket.file=new File([blob],ticketName(sale)+'.png',{type:'image/png'});
     const w=$('#tkwrap');if(w)w.innerHTML=`<img src="${URL.createObjectURL(blob)}" alt="Ticket de la venta">`;
   }catch(e){const w=$('#tkwrap');if(w)w.innerHTML=`<pre class="sel mono" style="white-space:pre-wrap;font-size:13px;margin:0">${esc(ticketText(sale))}</pre>`}
 }
@@ -198,10 +241,21 @@ async function shareTicket(){
   if(!currentTicket)return;
   const f=currentTicket.file;
   try{
-    if(f&&navigator.canShare&&navigator.canShare({files:[f]})){await navigator.share({files:[f],title:'Ticket Café Frío'});return}
-    if(navigator.share){await navigator.share({title:'Ticket Café Frío',text:ticketText(currentTicket.sale)});return}
+    if(!f){toast('Espera a que termine el ticket');return}
+    if(navigator.canShare&&navigator.canShare({files:[f]})){await navigator.share({files:[f],title:ticketName(currentTicket.sale)});return}
   }catch(e){if(e&&e.name==='AbortError')return}
-  if(f){const a=document.createElement('a');a.href=URL.createObjectURL(f);a.download=f.name;document.body.appendChild(a);a.click();a.remove();toast('Ticket descargado')}
+  saveTicketImg();
+}
+function saveTicketImg(){
+  const f=currentTicket&&currentTicket.file;if(!f){toast('Espera a que termine el ticket');return}
+  const a=document.createElement('a');a.href=URL.createObjectURL(f);a.download=f.name;document.body.appendChild(a);a.click();a.remove();toast('Ticket guardado: '+f.name);
+}
+function copyImage(){
+  if(!currentTicket)return;
+  try{
+    if(!window.ClipboardItem||!navigator.clipboard?.write)throw 0;
+    navigator.clipboard.write([new ClipboardItem({'image/png':currentTicket.blobP})]).then(()=>toast('Imagen copiada: pégala en el chat'),()=>toast('No se pudo copiar la imagen'));
+  }catch(e){toast('Este navegador no deja copiar imágenes; usa Compartir')}
 }
 async function shareText(){
   if(!currentTicket)return;const text=ticketText(currentTicket.sale);
@@ -244,7 +298,7 @@ function onScan(code){
 
 /* ---------- Mercado Pago ---------- */
 function reconcile(){
-  const mpSales=S.sales.filter(s=>s.method==='mp');const used=new Set();const match={};
+  const mpSales=S.sales.filter(s=>['card','transfer','mp','mixed'].includes(s.method));const used=new Set();const match={};
   for(const m of S.mp){const s=mpSales.find(x=>x.mpRef===m.id);if(s){match[m.id]=s;used.add(s.id)}}
   for(const m of [...S.mp].filter(m=>!match[m.id]).sort((a,b)=>a.ts-b.ts)){
     const tol=Math.max(1,m.amount*0.06);let best=null,bd=Infinity;
@@ -284,7 +338,7 @@ async function importMP(file){
   await persist('mp');sync();render();toast(n?n+' cobros nuevos importados':'No encontré cobros nuevos en ese archivo');
 }
 async function saleFromMP(id){const m=S.mp.find(x=>x.id===id);if(!m)return;
-  await put('sales',uid(),{ts:m.ts,items:[{pid:'',name:'Cobro Mercado Pago',qty:1,price:m.amount,cost:0}],total:m.amount,method:'mp',mpRef:m.id,folio:0});toast('Venta registrada')}
+  await put('sales',uid(),{ts:m.ts,items:[{pid:'',name:'Cobro Mercado Pago',qty:1,price:m.amount,cost:0}],subtotal:m.amount,total:m.amount,method:'card',mpRef:m.id,folio:0});toast('Venta registrada')}
 
 /* ---------- respaldo ---------- */
 function exportBackup(){
@@ -299,8 +353,8 @@ async function importBackup(file){
   catch(e){toast('Ese archivo no es un respaldo de Café Frío')}
 }
 function exportSalesCSV(){
-  const rows=[['fecha','hora','folio','cliente','productos','total','pago']];
-  [...S.sales].sort((a,b)=>a.ts-b.ts).forEach(s=>rows.push([dayKey(s.ts),hhmm(s.ts),s.folio||'',s.customer||'',(s.items||[]).map(i=>i.qty+'x '+i.name).join(' + '),s.total,METHODS[s.method]?.label||s.method]));
+  const rows=[['fecha','hora','folio','cliente','productos','subtotal','descuento','propina','total','pago']];
+  [...S.sales].sort((a,b)=>a.ts-b.ts).forEach(s=>rows.push([dayKey(s.ts),hhmm(s.ts),folioStr(s.folio),s.customer||'',(s.items||[]).map(i=>i.qty+'x '+i.name).join(' + '),s.subtotal??s.total,s.discount||0,s.tip||0,s.total,s.method==='mixed'&&s.payments?s.payments.map(p=>METHOD_LABEL(p.method)+' '+p.amount).join(' + '):METHOD_LABEL(s.method)]));
   const csv=rows.map(r=>r.map(v=>`"${String(v).replace(/"/g,'""')}"`).join(',')).join('\n');
   const f=new File(['﻿'+csv],`ventas-cafe-frio-${dayKey(Date.now())}.csv`,{type:'text/csv'});
   (async()=>{try{if(navigator.canShare&&navigator.canShare({files:[f]})){await navigator.share({files:[f]});return}}catch(e){if(e&&e.name==='AbortError')return}
@@ -349,25 +403,33 @@ function renderOrder(){
   const host=$('#orderhost'),bar=$('#obar');
   if(S.tab!=='caja'){host.innerHTML='';bar.hidden=true;return}
   const a=document.activeElement;if(a&&a.id==='cust'&&host.contains(a))return;
-  const items=cartItems(),total=cartTotal(),n=items.reduce((s,i)=>s+i.qty,0);
+  const items=cartItems(),calc=cartCalc(),total=calc.total,n=items.reduce((s,i)=>s+i.qty,0);
   const W=wide();
   bar.hidden=W||!n||S.orderOpen;
   bar.innerHTML=`<button data-act="open-order"><span class="cnt">${n}</span><span class="sp">Ver orden</span><span class="t num">${money(total)}</span></button>`;
   if(!W&&!S.orderOpen){host.innerHTML='';return}
   const lines=items.length?items.map(i=>{const p=prodById(i.pid);return `<div class="oline"><span class="th">${thumb(p)}</span><div style="min-width:0"><div class="n">${esc(i.name)}</div><div class="p num">${money(i.price)}${i.qty>1?' · '+money(i.qty*i.price):''}</div></div><span class="step"><button data-dec="${i.pid}" aria-label="Quitar uno">−</button><span>${i.qty}</span><button data-add="${i.pid}" aria-label="Agregar uno">+</button></span></div>`}).join('')
-    :`<div class="empty-o"><svg class="logo" viewBox="0 0 1115 527" aria-hidden="true"><use href="#logo"/></svg><div>Toca un producto para empezar la orden.</div></div>`;
+    :`<div class="empty-o"><svg class="logo peng" viewBox="330 0 430 500" aria-hidden="true"><use href="#peng"/></svg><div>Toca un producto para empezar la orden.</div></div>`;
   const dis=!items.length||S.busy?'disabled':'';
   host.innerHTML=`${!W?`<div class="scrim" data-act="close-order"></div>`:''}<aside class="order" aria-label="Orden actual">
     ${!W?`<span class="grab"></span>`:''}
-    <div class="oh"><h2>Orden${n?' · '+n:''}</h2><span class="f">Folio #${String(nextFolio()).padStart(3,'0')}</span></div>
+    <div class="oh"><h2>Orden${n?' · '+n:''}</h2><span class="f">Folio ${folioStr(nextFolio())}</span></div>
     <div class="lines">${lines}</div>
     <div class="of">
       <input id="cust" class="cust" placeholder="Nombre del cliente (opcional)" value="${esc(S.customer)}" autocomplete="off" maxlength="40">
+      ${items.length?`<button class="adjbtn" data-act="adj" aria-expanded="${S.adjOpen}">${S.disc||S.tip?`Descuento ${S.disc}% · Propina ${S.tip}%`:'Descuento o propina'} <span aria-hidden="true">${S.adjOpen?'▴':'▾'}</span></button>`:''}
+      ${S.adjOpen&&items.length?`<div class="adj">
+        <div class="adjrow"><span class="l">Descuento</span>${DISC.map(v=>`<button class="mini" data-disc="${v}" aria-pressed="${S.disc===v}">${v?v+'%':'No'}</button>`).join('')}</div>
+        <div class="adjrow"><span class="l">Propina</span>${TIPS.map(v=>`<button class="mini" data-tip="${v}" aria-pressed="${S.tip===v}">${v?v+'%':'No'}</button>`).join('')}</div>
+      </div>`:''}
+      ${calc.discount||calc.tip?`<div class="subt num"><span>Subtotal ${money(calc.sub)}</span>${calc.discount?`<span>− ${money(calc.discount)}</span>`:''}${calc.tip?`<span>+ ${money(calc.tip)} propina</span>`:''}</div>`:''}
       <div class="tot"><span class="l">Total</span><span class="v num">${money(total)}</span></div>
       <div class="pay">
         <button class="main" data-pay="cash" ${dis}>${icon('i-cash',22)} Efectivo</button>
-        <button data-pay="mp" ${dis}>${icon('i-mp',20)} Mercado Pago</button>
+        <button data-pay="card" ${dis}>${icon('i-card',20)} Tarjeta</button>
         <button data-pay="transfer" ${dis}>${icon('i-transfer',20)} Transferencia</button>
+        <button class="sm" data-pay="mixed" ${dis}>${icon('i-split',18)} Pago mixto</button>
+        <button class="sm" data-pay="gift" ${dis}>${icon('i-gift',18)} Cortesía</button>
       </div>
       ${items.length?`<button class="linkbtn" data-act="clear-order" style="align-self:center">Cancelar orden</button>`:''}
     </div>
@@ -388,6 +450,27 @@ function openTender(){
     <button class="btn primary" style="padding:16px;font-size:17px" data-act="confirm-cash" id="cashgo">Cobrar ${money(total)}</button>
   </div></div>`;
 }
+function openMixed(){
+  const total=cartTotal();if(!total)return;
+  $('#modal').innerHTML=`<div class="modal" data-act="close-modal"><div class="sheet" role="dialog" aria-label="Pago mixto">
+    <h2>Pago mixto</h2>
+    <div class="bigtot num">${money(total)}</div>
+    <div class="row"><div class="field"><label for="mx-cash">En efectivo</label><input id="mx-cash" inputmode="decimal" placeholder="$0"></div>
+    <div class="field"><label for="mx-other">El resto con</label><select id="mx-other"><option value="card">Tarjeta</option><option value="transfer">Transferencia</option></select></div></div>
+    <div class="changebox" id="mx-rest">Escribe cuánto pagan en efectivo</div>
+    <button class="btn primary" style="padding:16px;font-size:17px" data-act="confirm-mixed" id="mxgo" disabled>Cobrar ${money(total)}</button>
+  </div></div>`;
+}
+function updMixed(){const total=cartTotal();const c=Math.min(parseAmount($('#mx-cash').value)||0,total);const r=total-c;const lbl=$('#mx-other').selectedOptions[0].textContent;
+  $('#mx-rest').innerHTML=c>0?`Efectivo <b class="num">${money(c)}</b> · ${lbl} <b class="num">${money(r)}</b>`:'Escribe cuánto pagan en efectivo';$('#mxgo').disabled=!(c>0&&r>0)}
+function openGift(){
+  const sub=cartSubtotal();
+  $('#modal').innerHTML=`<div class="modal" data-act="close-modal"><div class="sheet" role="dialog" aria-label="Cortesía">
+    <h2>Cortesía</h2><div class="sub">La orden se registra en $0. El costo de los productos se cuenta en Números para que sepan cuánto regalan.</div>
+    <div class="bigtot num">${money(sub)} → $0</div>
+    <button class="btn primary" style="padding:16px;font-size:17px" data-act="confirm-gift">Registrar cortesía</button>
+  </div></div>`;
+}
 let tendered=0;
 function setTender(v){tendered=v;const total=cartTotal();const c=$('#chg');if(!c)return;
   if(!(v>0)){c.textContent='Elige cuánto te dieron';$('#cashgo').disabled=false;return}
@@ -396,12 +479,13 @@ function setTender(v){tendered=v;const total=cartTotal();const c=$('#chg');if(!c
 
 function saleRow(s){
   const items=(s.items||[]).map(i=>(i.qty>1?i.qty+'× ':'')+i.name).join(', ');const cf=S.confirm===s.id;
-  return `<div class="item click" data-ticket="${s.id}"><span class="time">${hhmm(s.ts)}</span><div style="min-width:0"><div class="t1">${s.customer?esc(s.customer)+' · ':''}${esc(items||'Venta')}</div><div class="t2"><span class="pill ${s.method==='mp'?'acc':''}">${METHODS[s.method]?.label||s.method}</span>${s.folio?' · #'+String(s.folio).padStart(3,'0'):''}</div></div>
+  return `<div class="item click" data-ticket="${s.id}"><span class="time">${hhmm(s.ts)}</span><div style="min-width:0"><div class="t1">${s.customer?esc(s.customer)+' · ':''}${esc(items||'Venta')}</div><div class="t2"><span class="pill ${s.method==='card'||s.method==='mp'?'acc':''}">${METHOD_LABEL(s.method)}</span>${s.folio?' · '+folioStr(s.folio):''}${s.discount&&s.method!=='gift'?' · −'+money(s.discount):''}${s.tip?' · propina '+money(s.tip):''}</div></div>
   <div style="display:flex;align-items:center;gap:8px"><span class="amt num">${money(s.total)}</span>${cf?`<button class="iconbtn warn" data-delsale="${s.id}">¿Borrar?</button>`:`<button class="iconbtn" data-confirm="${s.id}" aria-label="Borrar venta">${icon('i-trash',18)}</button>`}</div></div>`;
 }
 function viewSales(){
   const d0=new Date(S.day+'T00:00:00').getTime();const list=S.sales.filter(s=>s.ts>=d0&&s.ts<d0+DAY).sort((a,b)=>b.ts-a.ts);
-  const tot=list.reduce((a,s)=>a+s.total,0);const by={};list.forEach(s=>by[s.method]=(by[s.method]||0)+s.total);
+  const tot=list.reduce((a,s)=>a+s.total,0);const by={};list.forEach(s=>paidBy(s).forEach(([m,a])=>by[m]=(by[m]||0)+a));
+  const tips=list.reduce((a,s)=>a+(+s.tip||0),0),gifts=list.filter(s=>s.method==='gift').length;
   const t=dayKey(Date.now()),y=dayKey(Date.now()-DAY);
   return `<div class="section">
     <div><h1 class="h1">Ventas</h1><div class="sub" style="text-transform:capitalize">${esc(longDate(d0))}</div></div>
@@ -410,8 +494,8 @@ function viewSales(){
       <div class="field" style="max-width:220px"><label for="daypick">Otro día</label><input type="date" id="daypick" value="${S.day}"></div>
     </div>
     <div class="kpis">
-      <div class="kpi hero"><span class="l">Total del día</span><span class="v num">${money(tot)}</span><span class="d">${list.length} ${list.length===1?'venta':'ventas'}</span></div>
-      ${Object.entries(METHODS).map(([k,m])=>`<div class="kpi"><span class="l">${m.label}</span><span class="v num">${money(by[k]||0)}</span></div>`).join('')}
+      <div class="kpi hero"><span class="l">Total del día</span><span class="v num">${money(tot)}</span><span class="d">${list.length} ${list.length===1?'venta':'ventas'}${tips?' · '+money(tips)+' en propinas':''}${gifts?' · '+gifts+' cortesía'+(gifts>1?'s':''):''}</span></div>
+      ${['cash','card','transfer'].map(k=>`<div class="kpi"><span class="l">${METHODS[k].label}</span><span class="v num">${money(by[k]||0)}</span></div>`).join('')}
     </div>
     <div class="panel">${list.length?`<div class="sub" style="margin-bottom:4px">Toca una venta para ver o compartir su ticket.</div><div class="list">${list.map(saleRow).join('')}</div>`:`<div class="empty">No hay ventas registradas este día.</div>`}</div>
   </div>`;
@@ -473,22 +557,24 @@ function viewStats(){
   const top={};list.forEach(s=>(s.items||[]).forEach(i=>{top[i.name]=top[i.name]||{q:0,r:0};top[i.name].q+=+i.qty||0;top[i.name].r+=(+i.qty||0)*(+i.price||0)}));
   const topA=Object.entries(top).sort((a,b)=>b[1].r-a[1].r).slice(0,6),tm=topA[0]?topA[0][1].r:1;
   const catT={};list.forEach(s=>(s.items||[]).forEach(i=>{const c=prodById(i.pid)?.cat||'otro';catT[c]=(catT[c]||0)+(+i.qty||0)*(+i.price||0)}));
-  const by={};list.forEach(s=>by[s.method]=(by[s.method]||0)+s.total);
+  const by={};list.forEach(s=>paidBy(s).forEach(([m,a])=>by[m]=(by[m]||0)+a));const paidTot=Object.values(by).reduce((a,b)=>a+b,0)||1;
+  const giftCost=list.filter(s=>s.method==='gift').reduce((a,s)=>a+(s.items||[]).reduce((b,i)=>b+(+i.cost||0)*(+i.qty||0),0),0);
   const wd={};list.forEach(s=>{const d=new Date(s.ts).getDay();wd[d]=(wd[d]||0)+s.total});const bw=Object.entries(wd).sort((a,b)=>b[1]-a[1])[0];
   const wdn=d=>['domingo','lunes','martes','miércoles','jueves','viernes','sábado'][d];
   return `<div class="section">${head}
     <div class="kpis">
       <div class="kpi hero"><span class="l">Ventas</span><span class="v num">${money(tot)}</span><span class="d">${delta===null?'sin periodo previo':(delta>=0?'▲ ':'▼ ')+Math.abs(delta)+'% vs periodo anterior'}</span></div>
       <div class="kpi"><span class="l">Órdenes</span><span class="v num">${list.length}</span><span class="d">${units} productos</span></div>
-      <div class="kpi"><span class="l">Ticket promedio</span><span class="v num">${money(tot/list.length)}</span><span class="d">por orden</span></div>
+      <div class="kpi"><span class="l">Ticket promedio</span><span class="v num">${money(tot/Math.max(1,list.filter(s=>s.method!=='gift').length))}</span><span class="d">por orden</span></div>
       <div class="kpi"><span class="l">Utilidad estimada</span><span class="v num">${money(tot-cost)}</span><span class="d">${cost>0?Math.round((tot-cost)/tot*100)+'% margen bruto':'agrega costos en Menú'}</span></div>
     </div>
     <div class="panel chart"><h3>${chart.t}</h3>${chart.svg}<div class="sub" style="margin-top:6px">${peak?`Hora más movida: <b>${peak[0]}:00</b> (${peak[1]} órdenes).`:''}${bw&&S.range>=7?` Día más fuerte: <b>${wdn(+bw[0])}</b>.`:''}</div></div>
     <div class="two">
       <div class="panel"><h3>Lo que más se vende</h3>${topA.map(([n,v])=>`<div class="hbar"><span class="nm">${esc(n)}</span><span class="vv num">${v.q} · ${money(v.r)}</span><span class="tr"><i style="width:${(v.r/tm*100).toFixed(1)}%"></i></span></div>`).join('')}</div>
       <div class="panel"><h3>Cómo te pagan</h3>
-        <div class="split">${Object.entries(METHODS).map(([k,m])=>by[k]?`<i style="width:${(by[k]/tot*100).toFixed(2)}%;background:${m.color}" title="${m.label}"></i>`:'').join('')}</div>
-        <div class="legend">${Object.entries(METHODS).map(([k,m])=>`<span><i style="background:${m.color}"></i>${m.label} <b class="mono num">${Math.round((by[k]||0)/tot*100)}%</b></span>`).join('')}</div>
+        <div class="split">${['cash','card','transfer'].map(k=>by[k]?`<i style="width:${(by[k]/paidTot*100).toFixed(2)}%;background:${METHODS[k].color}" title="${METHODS[k].label}"></i>`:'').join('')}</div>
+        <div class="legend">${['cash','card','transfer'].map(k=>`<span><i style="background:${METHODS[k].color}"></i>${METHODS[k].label} <b class="mono num">${Math.round((by[k]||0)/paidTot*100)}%</b></span>`).join('')}</div>
+        ${giftCost?`<div class="sub" style="margin-top:8px">Cortesías: ${money(giftCost)} en costo de producto.</div>`:''}
         <h3 style="margin-top:18px">Por categoría</h3>
         ${Object.entries(catT).sort((a,b)=>b[1]-a[1]).map(([c,v])=>`<div class="hbar"><span class="nm">${CATS[c]?.label||'Otros'}</span><span class="vv num">${money(v)}</span><span class="tr"><i style="width:${(v/tot*100).toFixed(1)}%"></i></span></div>`).join('')}
       </div>
@@ -500,17 +586,17 @@ function viewMP(){
   return `<div class="section">
     <div><h1 class="h1">Mercado Pago</h1><div class="sub">Compara tus cobros con las ventas registradas</div></div>
     <div class="panel"><h3>Importar reporte</h3>
-      <ol class="steps"><li>En tu cuenta de Mercado Pago (desde la computadora) abre <b>Reportes</b>.</li><li>Genera el reporte de cobros o de actividad del periodo y descárgalo en <b>CSV</b>.</li><li>Súbelo aquí: cada cobro se empata con una venta marcada como Mercado Pago del mismo monto (±45 min).</li></ol>
+      <ol class="steps"><li>En tu cuenta de Mercado Pago (desde la computadora) abre <b>Reportes</b>.</li><li>Genera el reporte de cobros o de actividad del periodo y descárgalo en <b>CSV</b>.</li><li>Súbelo aquí: cada cobro se empata con una venta con tarjeta o transferencia del mismo monto (±45 min).</li></ol>
       <label class="btn primary" for="mpfile" style="margin-top:12px">${icon('i-mp',18)} Elegir archivo CSV</label><input type="file" id="mpfile" accept=".csv,text/csv,text/plain" hidden>
     </div>
     ${L.length?`<div class="kpis">
       <div class="kpi hero"><span class="l">Cobros importados</span><span class="v num">${money(tot)}</span><span class="d">${L.length} movimientos</span></div>
       <div class="kpi"><span class="l">Empatados</span><span class="v num">${ok}</span><span class="d">con una venta</span></div>
       <div class="kpi"><span class="l">Sin venta</span><span class="v num">${L.length-ok}</span><span class="d">cobrado, no registrado</span></div>
-      <div class="kpi"><span class="l">Ventas sin cobro</span><span class="v num">${orphanSales.length}</span><span class="d">marcadas MP, sin movimiento</span></div>
+      <div class="kpi"><span class="l">Ventas sin cobro</span><span class="v num">${orphanSales.length}</span><span class="d">tarjeta o transferencia, sin movimiento</span></div>
     </div>
     <div class="panel"><h3>Movimientos</h3><div class="list">${L.slice(0,150).map(m=>{const s=match[m.id];return `<div class="item"><span class="time">${new Date(m.ts).toLocaleDateString('es-MX',{day:'2-digit',month:'short'})}<br>${hhmm(m.ts)}</span><div style="min-width:0"><div class="t1">${esc(m.desc||'Cobro')}</div><div class="t2">${s?`<span class="pill">empatado</span> venta de las ${hhmm(s.ts)}`:`<span class="pill acc">sin venta</span>`}${m.ref?' · #'+esc(m.ref):''}</div></div><div style="display:flex;align-items:center;gap:8px"><span class="amt num">${money(m.amount)}</span>${!s?`<button class="btn ghost" style="padding:6px 10px;font-size:12px" data-mpsale="${esc(m.id)}">Registrar</button>`:''}</div></div>`}).join('')}</div></div>
-    ${orphanSales.length?`<div class="panel"><h3>Ventas Mercado Pago sin cobro en el reporte</h3><div class="list">${orphanSales.slice(0,60).map(saleRow).join('')}</div></div>`:''}`
+    ${orphanSales.length?`<div class="panel"><h3>Ventas con tarjeta o transferencia sin cobro en el reporte</h3><div class="list">${orphanSales.slice(0,60).map(saleRow).join('')}</div></div>`:''}`
     :`<div class="empty">Todavía no has importado movimientos. Cuando lo hagas, verás qué cobros ya están registrados y cuáles faltan.</div>`}
   </div>`;
 }
@@ -596,7 +682,9 @@ document.addEventListener('click',e=>{
   if(d.add){addItem(d.add);return}
   if(d.dec){decItem(d.dec);return}
   if(d.cat){S.cat=d.cat;render();return}
-  if(d.pay){if(d.pay==='cash')openTender();else finalize(d.pay);return}
+  if(d.pay){if(d.pay==='cash')openTender();else if(d.pay==='mixed')openMixed();else if(d.pay==='gift')openGift();else finalize(d.pay);return}
+  if(d.disc!==undefined){S.disc=+d.disc;render();return}
+  if(d.tip!==undefined){S.tip=+d.tip;render();return}
   if(d.tend){t.parentNode.querySelectorAll('button').forEach(b=>b.setAttribute('aria-pressed',b===t));$('#tend-in').value='';setTender(+d.tend);return}
   if(d.range){S.range=+d.range;render();return}
   if(d.day){S.day=d.day;S.confirm=null;render();return}
@@ -615,21 +703,24 @@ document.addEventListener('click',e=>{
     case 'close-scan':closeScanner();break;
     case 'scan-again':{const b=$('#scanres');if(b)b.innerHTML='';if(scan)scan.busy=false;break}
     case 'scan-assign':{const pid=$('#scanpick').value;mem.products[pid].code=d.code;persist('products');sync();addItem(pid);toast('Código asignado a '+mem.products[pid].name);const b=$('#scanres');if(b)b.innerHTML='';if(scan)scan.busy=false;break}
+    case 'adj':S.adjOpen=!S.adjOpen;render();break;
+    case 'confirm-mixed':{const total=cartTotal();const c=Math.min(parseAmount($('#mx-cash').value)||0,total);const o=$('#mx-other').value;$('#modal').innerHTML='';finalize('mixed',0,[{method:'cash',amount:c},{method:o,amount:Math.round((total-c)*100)/100}]);break}
+    case 'confirm-gift':$('#modal').innerHTML='';finalize('gift');break;
     case 'open-order':S.orderOpen=true;render();break;
     case 'close-order':S.orderOpen=false;render();break;
     case 'clear-order':clearOrder();render();break;
     case 'confirm-cash':{const total=cartTotal();const v=tendered>0?tendered:total;$('#modal').innerHTML='';finalize('cash',v>=total?v:0);break}
     case 'close-modal':$('#modal').innerHTML='';currentTicket=null;tendered=0;break;
     case 'share-ticket':shareTicket();break;
-    case 'share-text':shareText();break;
-    case 'copy-ticket':copyTicket();break;
+    case 'save-ticket-img':saveTicketImg();break;
+    case 'copy-image':copyImage();break;
     case 'new-product':openProduct(null);break;
     case 'save-product':saveProduct(d.id||null);break;
     case 'save-entry':saveEntry(d.id);break;
     case 'rm-photo':draftPhoto=null;$('#p-th').innerHTML=thumb({cat:$('#p-cat').value});t.hidden=true;break;
     case 'del-product':if(t.dataset.armed){$('#modal').innerHTML='';remove('products',d.id).then(()=>toast('Producto borrado'))}else{t.dataset.armed='1';t.textContent='¿Seguro?'}break;
     case 'save-ticket':put('config','ticket',readTicketForm()).then(()=>toast('Ticket guardado'));break;
-    case 'preview-ticket':{const old=S.config;S.config=[{id:'ticket',...readTicketForm()}];const ex={ts:Date.now(),folio:7,customer:'Maggie',method:'cash',received:200,items:[{name:'Brew Chai',qty:1,price:90},{name:'Pay',qty:1,price:50}],total:140};openTicket(ex,false).finally(()=>{S.config=old});break}
+    case 'preview-ticket':{const old=S.config;S.config=[{id:'ticket',...readTicketForm()}];const ex={ts:Date.now(),folio:129,customer:'Maggie',method:'cash',received:200,items:[{name:'Brew Chai',qty:1,price:90},{name:'Pay',qty:1,price:50}],subtotal:140,discount:14,discPct:10,total:126};openTicket(ex,false).finally(()=>{S.config=old});break}
     case 'backup':exportBackup();break;
     case 'csv':exportSalesCSV();break;
     case 'clear-demo':if(t.dataset.armed){for(const k of Object.keys(mem.sales))if(mem.sales[k].demo)delete mem.sales[k];persist('sales');sync();render();toast('Ventas de prueba borradas')}else{t.dataset.armed='1';t.textContent='¿Seguro? Toca otra vez'}break;
@@ -638,9 +729,11 @@ document.addEventListener('click',e=>{
 document.addEventListener('input',e=>{
   if(e.target.id==='cust')S.customer=e.target.value;
   if(e.target.id==='q'){S.search=e.target.value;$('#main').innerHTML=viewCaja()}
+  if(e.target.id==='mx-cash')updMixed();
   if(e.target.id==='tend-in'){document.querySelectorAll('#tender button').forEach(b=>b.setAttribute('aria-pressed','false'));setTender(parseAmount(e.target.value)||0)}
 });
 document.addEventListener('change',e=>{
+  if(e.target.id==='mx-other')updMixed();
   if(e.target.id==='daypick'&&e.target.value){S.day=e.target.value;e.target.blur();render()}
   if(e.target.id==='mpfile'&&e.target.files[0]){importMP(e.target.files[0]);e.target.value=''}
   if(e.target.id==='restore'&&e.target.files[0]){importBackup(e.target.files[0]);e.target.value=''}
@@ -654,7 +747,7 @@ matchMedia('(min-width:900px)').addEventListener('change',render);
 try{if(localStorage.getItem('cf-theme')==='dark'){document.documentElement.classList.add('dark');document.querySelector('meta[name="theme-color"]').content='#0D0D0D'}}catch(e){}
 render();
 (async()=>{
-  await loadAll();await seedIfEmpty();sync();S.ready=true;render();
+  await loadAll();await seedIfEmpty();await migrate();sync();S.ready=true;render();
   if('serviceWorker' in navigator&&location.protocol==='https:'){try{navigator.serviceWorker.register('sw.js')}catch(e){}}
 })();
 })();
