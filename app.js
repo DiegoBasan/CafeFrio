@@ -239,6 +239,24 @@ function ticketText(s){
 }
 let currentTicket=null;
 function ticketName(s){const d=new Date(s.ts);const p=n=>String(n).padStart(2,'0');return `CafeFrio ${p(d.getDate())}-${p(d.getMonth()+1)}-${String(d.getFullYear()).slice(2)} ${folioStr(s.folio)}`}
+// Muestra el ticket con su sombra dibujada dentro de la imagen (Safari pinta mal las sombras CSS al animar)
+// y lo "imprime" deslizándolo desde la ranura cada vez que se abre.
+async function showPrinted(c){
+  const w=$('#tkwrap');if(!w)return;
+  const dark=document.documentElement.classList.contains('dark');
+  const sx=56,sb=80;const d=document.createElement('canvas');d.width=c.width+sx*2;d.height=c.height+sb;
+  const x=d.getContext('2d');
+  x.shadowColor=dark?'rgba(0,0,0,.6)':'rgba(30,10,15,.16)';x.shadowBlur=44;x.shadowOffsetY=18;x.drawImage(c,sx,0);
+  x.shadowColor=dark?'rgba(0,0,0,.5)':'rgba(0,0,0,.12)';x.shadowBlur=4;x.shadowOffsetY=2;x.drawImage(c,sx,0);
+  x.shadowColor='transparent';x.drawImage(c,sx,0);
+  const img=new Image();img.alt='Ticket de la venta';img.src=d.toDataURL('image/png');
+  try{await img.decode()}catch(e){}
+  if(!document.body.contains(w))return;
+  const paperW=Math.min(330,w.clientWidth-24);img.style.width=(paperW*d.width/c.width)+'px';
+  w.innerHTML='';w.appendChild(img);
+  if(!matchMedia('(prefers-reduced-motion: reduce)').matches&&img.animate)
+    img.animate([{transform:'translateY(-100%)'},{transform:'translateY(0)'}],{duration:1100,easing:'cubic-bezier(.35,.6,.3,1)'});
+}
 async function openTicket(sale,fresh){
   let resolveBlob;currentTicket={sale,file:null,blobP:new Promise(r=>resolveBlob=r)};
   const fol=folioStr(sale.folio).slice(1);
@@ -257,7 +275,7 @@ async function openTicket(sale,fresh){
     if(!currentTicket||currentTicket.sale!==sale)return;
     const blob=await new Promise(r=>c.toBlob(r,'image/png'));
     resolveBlob(blob);currentTicket.file=new File([blob],ticketName(sale)+'.png',{type:'image/png'});
-    const w=$('#tkwrap');if(w)w.innerHTML=`<img src="${URL.createObjectURL(blob)}" alt="Ticket de la venta">`;
+    await showPrinted(c);
   }catch(e){const w=$('#tkwrap');if(w)w.innerHTML=`<pre class="sel mono" style="white-space:pre-wrap;font-size:13px;margin:0">${esc(ticketText(sale))}</pre>`}
 }
 async function shareTicket(){
